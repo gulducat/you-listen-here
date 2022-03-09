@@ -37,7 +37,7 @@ func getParams(in, out int) (portaudio.StreamParameters, error) {
 
 type Streamer struct {
 	*portaudio.Stream
-	ch chan float32
+	ch chan []float32
 }
 
 // type StreamProcessor func() ([]float32, []float32)
@@ -52,62 +52,28 @@ func OpenStream(ctx context.Context, p portaudio.StreamParameters, s *Streamer, 
 	chk("close", s.Close())
 }
 
-func (s *Streamer) read(in, out []float32) {
-	// log.Println("read", in)
-	for i := range in {
-		// log.Println("i", i, in[i])
-		select {
-		case s.ch <- in[i]:
-		case <-time.After(time.Millisecond * 20):
-			log.Println("read timeout")
-		}
+func (s *Streamer) read(in, _out []float32) {
+	// log.Println("read", len(in))
+	// for i := range in {
+	// log.Println("i", i, in[i])
+	select {
+	case s.ch <- in:
+	case <-time.After(time.Millisecond * 150):
+		log.Println("read timeout")
 	}
+	// }
 }
 
-func (s *Streamer) write(in, out []float32) {
+func (s *Streamer) write(_in, out []float32) {
 	// log.Println("write")
+	var in []float32
+	select {
+	case v := <-s.ch:
+		in = v
+	case <-time.After(time.Millisecond * 150):
+		log.Println("write timeout")
+	}
 	for i := range out {
-		select {
-		case v := <-s.ch:
-			// log.Println("v", v)
-			out[i] = v
-		case <-time.After(time.Millisecond * 20):
-			log.Println("write timeout")
-		}
+		out[i] = in[i]
 	}
 }
-
-// func (s *Streamer) read(ctx context.Context) func([]float32, []float32) {
-// 	return func(in, out []float32) {
-// 		// log.Println("read", in)
-// 		for i := range in {
-// 			// log.Println("i", i, in[i])
-// 			select {
-// 			case s.ch <- in[i]:
-// 			case <-time.After(time.Millisecond * 20):
-// 				log.Println("read timeout")
-// 			case <-ctx.Done():
-// 				log.Println("read ctx done")
-// 				return
-// 			}
-// 		}
-// 	}
-// }
-
-// func (s *Streamer) write(ctx context.Context) func([]float32, []float32) {
-// 	return func(in, out []float32) {
-// 		// log.Println("write")
-// 		for i := range out {
-// 			select {
-// 			case v := <-s.ch:
-// 				// log.Println("v", v)
-// 				out[i] = v
-// 			case <-time.After(time.Millisecond * 20):
-// 				log.Println("write timeout")
-// 			case <-ctx.Done():
-// 				log.Println("write ctx done")
-// 				return
-// 			}
-// 		}
-// 	}
-// }

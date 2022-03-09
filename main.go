@@ -44,18 +44,19 @@ func main() {
 
 	// TODO: 2,2 (in,out) works for my clavinova,
 	// but won't work for mic which needs 1,1
-	p, err := getParams(1, 1)
+	// p, err := getParams(1, 1)
+	p, err := getParams(2, 2)
 	chk("getParams", err)
 	// spew.Dump("params", p)
 	// return
 
-	// buffer := int(p.SampleRate) * 2
+	buffer := int(p.SampleRate) * 2
 	// buffer := int(p.SampleRate)
-	buffer := int(p.SampleRate) / 2
+	// buffer := int(p.SampleRate) / 2
 	// buffer := int(p.SampleRate) / 32
 	// buffer := int(p.SampleRate) / 128
 	// buffer := 1024
-	sch := make(chan float32, buffer)
+	sch := make(chan []float32, buffer)
 	s := &Streamer{
 		ch: sch,
 	}
@@ -64,18 +65,25 @@ func main() {
 
 	case "echo":
 		go OpenStream(ctx, p, s, s.read)
-		time.Sleep(time.Millisecond * 500)
-		s2 := &Streamer{ch: sch}
+		// time.Sleep(time.Millisecond * 500) // does nothing... how to make it do something again? ensure full buffer?
+
+		sch2 := make(chan []float32, buffer)
+		s2 := &Streamer{ch: sch2}
+		// little go-betweener sorta simulates what the http worker does?
+		go func() {
+			for {
+				s2.ch <- <-s.ch
+			}
+		}()
 		go OpenStream(ctx, p, s2, s2.write)
 
-	// case "server":
-	// 	defer OpenStream(p, s, s.read)()
-	// 	go webServer(s.ch, doneCh)
+	case "server":
+		go OpenStream(ctx, p, s, s.read)
+		go webServer(ctx, s.ch)
 
-	// case "client":
-	// 	// p.Output.Channels = 1
-	// 	defer OpenStream(p, s, s.write)()
-	// 	go stream(s.ch)
+	case "client":
+		go OpenStream(ctx, p, s, s.write)
+		go stream(s.ch)
 
 	default:
 		log.Fatal(badArgs)
@@ -89,6 +97,8 @@ func main() {
 	case <-ctx.Done():
 		log.Println("SELECT ctx:", ctx.Err())
 	}
+	log.Println("start final sleep")
+	time.Sleep(time.Millisecond * 50)
 	log.Println("fin.")
 
 }
