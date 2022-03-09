@@ -9,11 +9,12 @@ package main
  */
 
 import (
+	"context"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
-
-	"github.com/gordonklaus/portaudio"
 )
 
 func chk(msg string, err error) {
@@ -30,18 +31,23 @@ func main() {
 		log.Fatal(badArgs)
 	}
 
-	// doneCh := make(chan struct{})
-	defer audioInit()()
+	// for wrapping things up
+	defer log.Println("really fin.")
+	sigsCh := make(chan os.Signal, 1)
+	signal.Notify(sigsCh, syscall.SIGINT, syscall.SIGTERM)
+	ctx, stopCtx := context.WithCancel(context.Background())
+	defer stopCtx()
 
-	// TODO: 2,2 (in,out) works for my clavinova and speakers,
-	// but won't work for mic which needs 1,2
-	p, err := getParams(2, 2)
+	// init portaudio
+	term := audioInit()
+	defer term()
+
+	// TODO: 2,2 (in,out) works for my clavinova,
+	// but won't work for mic which needs 1,1
+	p, err := getParams(1, 1)
 	chk("getParams", err)
 	// spew.Dump("params", p)
 	// return
-	log.Println("samplerate:", p.SampleRate)
-	log.Println("input:", p.Input.Device.Name)
-	log.Println("output:", p.Output.Device.Name)
 
 	// buffer := int(p.SampleRate) * 2
 	// buffer := int(p.SampleRate)
@@ -57,9 +63,10 @@ func main() {
 	switch os.Args[1] {
 
 	case "echo":
-		defer OpenStream(p, s, s.read)()
+		go OpenStream(ctx, p, s, s.read)
+		time.Sleep(time.Millisecond * 500)
 		s2 := &Streamer{ch: sch}
-		defer OpenStream(p, s2, s2.write)()
+		go OpenStream(ctx, p, s2, s2.write)
 
 	// case "server":
 	// 	defer OpenStream(p, s, s.read)()
@@ -74,63 +81,14 @@ func main() {
 		log.Fatal(badArgs)
 	}
 
-	time.Sleep(time.Second * 60)
-	// doneCh <- struct{}{}
-}
-
-func audioInit() (terminate func()) {
-	log.Println("portaudio.Initialize()")
-	chk("init", portaudio.Initialize())
-
-	return func() {
-		log.Println("portaudio.Terminate()")
-		chk("term", portaudio.Terminate())
+	select {
+	case <-time.After(time.Second * 60):
+		log.Println("SELECT after")
+	case sig := <-sigsCh:
+		log.Println("SELECT signal:", sig)
+	case <-ctx.Done():
+		log.Println("SELECT ctx:", ctx.Err())
 	}
-}
+	log.Println("fin.")
 
-func getParams(in, out int) (portaudio.StreamParameters, error) {
-	h, err := portaudio.DefaultHostApi()
-	chk("DefaultHostApi", err)
-
-	p := portaudio.LowLatencyParameters(h.DefaultInputDevice, h.DefaultOutputDevice)
-	p.Input.Channels = in
-	p.Output.Channels = out
-	return p, nil
-}
-
-type Streamer struct {
-	*portaudio.Stream
-	ch chan float32
-}
-
-func OpenStream(p portaudio.StreamParameters, s *Streamer, f func([]float32, []float32)) func() {
-	var err error
-	s.Stream, err = portaudio.OpenStream(p, f)
-	chk("open", err)
-	chk("start", s.Start())
-	return func() {
-		defer s.Close()
-		chk("stop", s.Stop())
-	}
-}
-
-func (s *Streamer) read(in, out []float32) {
-	// log.Println("read", in)
-	for i := range in {
-		// log.Println("i", i, in[i])
-		s.ch <- in[i]
-	}
-}
-
-func (s *Streamer) write(in, out []float32) {
-	// log.Println("write")
-	for i := range out {
-		select {
-		case v := <-s.ch:
-			// log.Println("v", v)
-			out[i] = v
-		case <-time.After(time.Second):
-			log.Println("timeout")
-		}
-	}
 }
