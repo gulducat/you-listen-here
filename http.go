@@ -16,19 +16,19 @@ import (
 )
 
 func stream(msgCh chan<- []float32) {
-	resp, err := http.Get("http://127.0.0.1:8080/stream")
+	host := os.Getenv("HOST")
+	if host == "" {
+		host = "http://127.0.0.1:8080"
+	}
+	log.Println("connecting to:", host+"/stream")
+	resp, err := http.Get(host + "/stream")
 	if err != nil {
 		log.Fatal("get err:", err)
 	}
 	reader := bufio.NewReader(resp.Body)
-	// reader := bufio.NewReaderSize(resp.Body, 10)
-
-	// this did not help.
-	// buf := []float32{}
-	// bufPrimed := false
 
 	for {
-		ticker := time.NewTicker(time.Second / 48000)
+		ticker := time.NewTicker(time.Second / 48000) // TODO: unhardcode
 
 		line, err := reader.ReadString('\n')
 		if err != nil {
@@ -99,6 +99,7 @@ func webServer(ctx context.Context, msgCh <-chan []float32) {
 			case <-stopCh:
 				log.Println("stopCh")
 				break loop
+
 			case msg := <-msgCh:
 				chLock.RLock()
 				for _, ch := range chans {
@@ -114,9 +115,6 @@ func webServer(ctx context.Context, msgCh <-chan []float32) {
 							return
 						}
 					}(ch)
-					// if ch, ok <- msg; !ok {
-					// 	log.Println("a channel must be closed")
-					// }
 				}
 				chLock.RUnlock()
 
@@ -127,15 +125,32 @@ func webServer(ctx context.Context, msgCh <-chan []float32) {
 	}(ctx)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		f, err := os.Open("index.html")
-		chk("open index", err)
-		bts, err := ioutil.ReadAll(f)
-		chk("ioutil.read", err)
-		_, err = w.Write(bts)
-		chk("write index", err)
-	})
+		uri := strings.TrimPrefix(r.RequestURI, "/")
+		if uri == "" {
+			uri = "index.html"
+		}
+		if uri == "favicon.ico" {
+			return
+		}
+		log.Println("URI:", uri)
 
-	http.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
+		tryFile := func() error {
+			f, err := os.Open(uri)
+			if err != nil {
+				return err
+			}
+			log.Println("loading file:", f.Name())
+			bts, err := ioutil.ReadAll(f)
+			if err != nil {
+				return err
+			}
+			_, err = w.Write(bts)
+			return err
+		}
+		if tryFile() == nil {
+			return
+		}
+
 		ch := make(chan []float32, 48000) // todo: hm.
 		defer close(ch)
 		id := rand.Int() // todo hm.
@@ -145,7 +160,7 @@ func webServer(ctx context.Context, msgCh <-chan []float32) {
 		chLock.Unlock()
 
 		log.Println("connected:", id)
-		handle(w, r, id, ch)
+		handleStream(w, r, id, ch)
 		log.Println("completed:", id)
 
 		chLock.Lock()
@@ -167,12 +182,11 @@ func webServer(ctx context.Context, msgCh <-chan []float32) {
 	}
 }
 
-func handle(w http.ResponseWriter, r *http.Request, id int, ch <-chan []float32) {
+func handleStream(w http.ResponseWriter, r *http.Request, id int, ch <-chan []float32) {
 
 	// hm. https://medium.com/@valentijnnieman_79984/how-to-build-an-audio-streaming-server-in-go-part-1-1676eed93021
 	w.Header().Set("Connection", "Keep-Alive")
 	w.Header().Set("Transfer-Encoding", "chunked")
-	// TODO: something something binary.Write(w) instead of w.Write() ???
 
 	for {
 		select {
@@ -180,6 +194,7 @@ func handle(w http.ResponseWriter, r *http.Request, id int, ch <-chan []float32)
 			msg := ""
 			for i := range c {
 				msg += fmt.Sprintf("%f,", c[i])
+				// msg += fmt.Sprintf("%d,", fToInt16(c[i]))
 			}
 			msg += "\n"
 			// msg := fmt.Sprintf("%f\n", c)

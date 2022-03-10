@@ -70,8 +70,9 @@ func (s *Streamer) write(_in, out []float32) {
 	select {
 	case v := <-s.ch:
 		in = v
-	case <-time.After(time.Millisecond * 150):
+	case <-time.After(time.Millisecond * 500):
 		log.Println("write timeout")
+		return
 	}
 	for i := range out {
 		out[i] = in[i]

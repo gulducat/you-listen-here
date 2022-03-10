@@ -44,8 +44,7 @@ func main() {
 
 	// TODO: 2,2 (in,out) works for my clavinova,
 	// but won't work for mic which needs 1,1
-	// p, err := getParams(1, 1)
-	p, err := getParams(2, 2)
+	p, err := getParams(1, 1)
 	chk("getParams", err)
 	// spew.Dump("params", p)
 	// return
@@ -90,8 +89,8 @@ func main() {
 	}
 
 	select {
-	case <-time.After(time.Second * 60):
-		log.Println("SELECT after")
+	// case <-time.After(time.Second * 300):
+	// 	log.Println("SELECT after")
 	case sig := <-sigsCh:
 		log.Println("SELECT signal:", sig)
 	case <-ctx.Done():
