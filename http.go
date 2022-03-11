@@ -27,8 +27,6 @@ func webClient(msgCh chan<- []float32) {
 	reader := bufio.NewReader(resp.Body)
 
 	for {
-		ticker := time.NewTicker(time.Second / 48000) // TODO: unhardcode, or remove?
-
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			log.Println("readbytes err:", err)
@@ -37,19 +35,14 @@ func webClient(msgCh chan<- []float32) {
 		// log.Printf("got: %s", line) // this actually slows things down noticably when we're talking 48000hz
 		samps := []float32{}
 		for _, samp := range strings.Split(line, ",") {
-			trimmed := strings.TrimSpace(samp)
-			if trimmed == "" {
-				continue
-			}
-			f, err := strconv.ParseFloat(trimmed, 32)
+			samp = strings.TrimSpace(samp)
+			f, err := strconv.ParseFloat(samp, 32)
 			if err != nil {
 				log.Fatal("parseFloat:", err)
 			}
 			samps = append(samps, float32(f))
 		}
 		msgCh <- samps
-
-		<-ticker.C
 	}
 }
 
@@ -171,6 +164,7 @@ func handleStream(w http.ResponseWriter, r *http.Request, id int, ch <-chan []fl
 				msg += fmt.Sprintf("%f,", c[i])
 				// msg += fmt.Sprintf("%d,", fToInt16(c[i]))
 			}
+			msg = strings.Trim(msg, ",")
 			msg += "\n"
 			if _, err := w.Write([]byte(msg)); err != nil {
 				log.Println(id, "err:", err)
