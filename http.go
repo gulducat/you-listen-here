@@ -85,10 +85,23 @@ func webServer(ctx context.Context, msgCh <-chan []float32) {
 
 	http.HandleFunc("/", tryFiles)
 
+	http.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
+		msg := fmt.Sprintf("total: %d\ncurrent: %d\n", totalCount, len(chans))
+		if _, err := w.Write([]byte(msg)); err != nil {
+			if err != nil {
+				log.Println("error writing stats:", err)
+			}
+		}
+	})
+
 	http.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
-		if len(chans) > 200 {
+		if len(chans) > 50 {
+			w.WriteHeader(http.StatusGatewayTimeout)
 			_, err := w.Write([]byte("uh oh too many?"))
 			chk("too many", err)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
 			return
 		}
 		totalCount++
@@ -100,13 +113,14 @@ func webServer(ctx context.Context, msgCh <-chan []float32) {
 			chans[id] = ch
 			chLock.Unlock()
 
-			log.Println("connected:", id)
+			log.Println("✅ connecting:", id, "current:", len(chans))
 			handleStream(w, r, id, ch)
-			log.Println("completed:", id)
 
 			chLock.Lock()
 			delete(chans, id)
 			chLock.Unlock()
+
+			log.Println("❌ completed:", id, "current:", len(chans))
 		}(totalCount)
 	})
 
