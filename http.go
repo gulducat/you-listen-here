@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"math/rand"
 	"net/http"
 	"os"
 	"strconv"
@@ -15,7 +14,7 @@ import (
 	"time"
 )
 
-func stream(msgCh chan<- []float32) {
+func webClient(msgCh chan<- []float32) {
 	host := os.Getenv("HOST")
 	if host == "" {
 		host = "http://127.0.0.1:8080"
@@ -28,7 +27,7 @@ func stream(msgCh chan<- []float32) {
 	reader := bufio.NewReader(resp.Body)
 
 	for {
-		ticker := time.NewTicker(time.Second / 48000) // TODO: unhardcode
+		ticker := time.NewTicker(time.Second / 48000) // TODO: unhardcode, or remove?
 
 		line, err := reader.ReadString('\n')
 		if err != nil {
@@ -49,29 +48,6 @@ func stream(msgCh chan<- []float32) {
 			samps = append(samps, float32(f))
 		}
 		msgCh <- samps
-		// log.Printf("got: %s", samps) // this actually slows things down noticably when we're talking 48000hz
-
-		// f, err := strconv.ParseFloat(strings.TrimSpace(line), 32)
-		// if err != nil {
-		// 	log.Fatal("parseFloat:", err)
-		// }
-
-		// msgCh <- float32(f)
-		// if bufPrimed {
-		// 	msgCh <- float32(f)
-		// } else {
-		// 	buf = append(buf, float32(f))
-		// 	// fmt.Println("len:", len(buf), "len2:", len(msgCh))
-		// 	// if len(buf) == len(msgCh) { msgCh len is 0...
-		// 	if len(buf) == 48000 {
-		// 		log.Println("primed yeah!")
-		// 		bufPrimed = true
-		// 		for _, f := range buf {
-		// 			msgCh <- f
-		// 		}
-		// 		log.Println("gotem")
-		// 	}
-		// }
 
 		<-ticker.C
 	}
@@ -80,15 +56,10 @@ func stream(msgCh chan<- []float32) {
 func webServer(ctx context.Context, msgCh <-chan []float32) {
 	chans := make(map[int]chan []float32)
 	var chLock sync.RWMutex
+	totalCount := 0
 
 	// send messages from msgCh to all worker chans
 	go func(ctx context.Context) {
-		// t := time.NewTicker(time.Second / 10)
-		// t := time.NewTicker(time.Second / len(msgCh)) // lol.  need to buffer.
-		// t := time.NewTicker(time.Second / len(msgCh)) // lol.  need to buffer.
-		// t := time.NewTicker(time.Second / 52000) // it just needs to be *bigger* than device's samplerate? nope lol bigger number makes slow down sound
-		// t := time.NewTicker(time.Second / 48000) // TODO
-		// t := time.NewTicker(time.Second / 16000) // TODO
 		stopCh := make(chan struct{}, 1)
 	loop:
 		for {
@@ -103,10 +74,8 @@ func webServer(ctx context.Context, msgCh <-chan []float32) {
 			case msg := <-msgCh:
 				chLock.RLock()
 				for _, ch := range chans {
-					// ch <- msg
-
 					// this does something, but does it help?
-					go func(ch chan []float32) {
+					go func(ch chan []float32) { // TODO?
 						select {
 						case ch <- msg:
 						case <-time.After(time.Millisecond * 500):
@@ -117,55 +86,35 @@ func webServer(ctx context.Context, msgCh <-chan []float32) {
 					}(ch)
 				}
 				chLock.RUnlock()
-
-				// log.Println("block")
-				// <-t.C
 			}
 		}
 	}(ctx)
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		uri := strings.TrimPrefix(r.RequestURI, "/")
-		if uri == "" {
-			uri = "index.html"
-		}
-		if uri == "favicon.ico" {
+	http.HandleFunc("/", tryFiles)
+
+	http.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
+		if len(chans) > 200 {
+			_, err := w.Write([]byte("uh oh too many?"))
+			chk("too many", err)
 			return
 		}
-		log.Println("URI:", uri)
+		totalCount++
+		func(id int) {
+			ch := make(chan []float32, 48000) // todo: hm.
+			// defer close(ch) // this causes panic, shouldn't close here on the receiver side
 
-		tryFile := func() error {
-			f, err := os.Open(uri)
-			if err != nil {
-				return err
-			}
-			log.Println("loading file:", f.Name())
-			bts, err := ioutil.ReadAll(f)
-			if err != nil {
-				return err
-			}
-			_, err = w.Write(bts)
-			return err
-		}
-		if tryFile() == nil {
-			return
-		}
+			chLock.Lock()
+			chans[id] = ch
+			chLock.Unlock()
 
-		ch := make(chan []float32, 48000) // todo: hm.
-		defer close(ch)
-		id := rand.Int() // todo hm.
+			log.Println("connected:", id)
+			handleStream(w, r, id, ch)
+			log.Println("completed:", id)
 
-		chLock.Lock()
-		chans[id] = ch
-		chLock.Unlock()
-
-		log.Println("connected:", id)
-		handleStream(w, r, id, ch)
-		log.Println("completed:", id)
-
-		chLock.Lock()
-		delete(chans, id)
-		chLock.Unlock()
+			chLock.Lock()
+			delete(chans, id)
+			chLock.Unlock()
+		}(totalCount)
 	})
 
 	errCh := make(chan error)
@@ -182,8 +131,34 @@ func webServer(ctx context.Context, msgCh <-chan []float32) {
 	}
 }
 
-func handleStream(w http.ResponseWriter, r *http.Request, id int, ch <-chan []float32) {
+func tryFiles(w http.ResponseWriter, r *http.Request) {
+	uri := strings.TrimPrefix(r.RequestURI, "/")
+	if uri == "" {
+		uri = "index.html"
+	}
+	if uri == "favicon.ico" {
+		return
+	}
 
+	f, err := os.Open(uri)
+	if err != nil {
+		log.Println("open", uri, err)
+		return
+	}
+	log.Println("loading file:", f.Name())
+	bts, err := ioutil.ReadAll(f)
+	if err != nil {
+		log.Println("readall", uri, err)
+		return
+	}
+	_, err = w.Write(bts)
+	if err != nil {
+		log.Println("write", uri, err)
+	}
+
+}
+
+func handleStream(w http.ResponseWriter, r *http.Request, id int, ch <-chan []float32) {
 	// hm. https://medium.com/@valentijnnieman_79984/how-to-build-an-audio-streaming-server-in-go-part-1-1676eed93021
 	w.Header().Set("Connection", "Keep-Alive")
 	w.Header().Set("Transfer-Encoding", "chunked")
@@ -197,34 +172,19 @@ func handleStream(w http.ResponseWriter, r *http.Request, id int, ch <-chan []fl
 				// msg += fmt.Sprintf("%d,", fToInt16(c[i]))
 			}
 			msg += "\n"
-			// msg := fmt.Sprintf("%f\n", c)
-			// msg := fmt.Sprintf("%d hi %f\n", id, c)
-			// log.Printf("writing %s", msg)
 			if _, err := w.Write([]byte(msg)); err != nil {
 				log.Println(id, "err:", err)
 			}
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
-			// return
 
 		case <-r.Context().Done():
 			err := r.Context().Err()
 			if err != nil && err != context.Canceled {
 				log.Println(id, "ctx err:", err)
 			}
-			// log.Println(id, "ctx done")
 			return
 		}
 	}
 }
-
-/*
- * eddie:
- * what all are they doing?  duct for duct, maybe 5-6k
- * this is more of a redesign, which requires some expertise?
- * national comfort institute - industry leaders for design standards
- *
- * he has the guys, labor is ok
- * not as sure of materials, national shortage of duct work
- */

@@ -54,14 +54,11 @@ func OpenStream(ctx context.Context, p portaudio.StreamParameters, s *Streamer, 
 
 func (s *Streamer) read(in, _out []float32) {
 	// log.Println("read", len(in))
-	// for i := range in {
-	// log.Println("i", i, in[i])
 	select {
 	case s.ch <- in:
 	case <-time.After(time.Millisecond * 150):
 		log.Println("read timeout")
 	}
-	// }
 }
 
 func (s *Streamer) write(_in, out []float32) {
