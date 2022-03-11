@@ -126,8 +126,12 @@ func webServer(ctx context.Context, msgCh <-chan []float32) {
 
 	errCh := make(chan error)
 	go func() {
-		fmt.Println("starting server")
-		errCh <- http.ListenAndServe("0.0.0.0:8080", nil)
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "8080"
+		}
+		log.Println("http listen: " + port)
+		errCh <- http.ListenAndServe("0.0.0.0:"+port, nil)
 	}()
 
 	select {
