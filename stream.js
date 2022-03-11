@@ -1,3 +1,7 @@
+var play = document.querySelector("#play");
+var stop = document.querySelector("#stop");
+var message = document.querySelector("#message")
+
 // raw xhr is apparently the simplest way to get a streaming http connection..?
 // fetch() isn't good for it, socket.io seems mixed and more complicated.
 // todo: maybe actual websocket is the way to go?  but for now...
@@ -61,26 +65,41 @@ xhr.onprogress = function () {
             samps = buf.slice(0, bufferSize);
             buf = buf.slice(bufferSize); // reset our lil sample buffer.
             makeSound(samps);
+
+            // feels weird to put this here but readyState 3 happens so fast we never see "buffering" msg
+            message.innerHTML = "🎶 playing 🎶";
         }
     });
 };
 
 xhr.onreadystatechange = function () {
-    // console.log("readyState:", xhr.readyState)
-    if (xhr.readyState === 4) {
-        console.log("xhr.exit", xhr.status, xhr.responseText.length);
+    // https://developer.mozilla.org/en-US/docs/Web/API/XMLHttpRequest/readyState
+    switch(xhr.readyState) {
+    case 2: // headers received
+        stop.disabled = false;
+        play.disabled = true;
+        message.innerHTML = "✨ buffering ✨";
+        break;
+    case 4: // done
+        console.log("xhr done", xhr.status, xhr.responseText.length);
+        stop.disabled = true;
+        play.disabled = false;
+        break;
     }
 };
 
-var play = document.querySelector('.play');
-var stop = document.querySelector('.stop');
+xhr.onerror = function () {
+    message.innerHTML = "server error? 😔";
+}
 
 play.onclick = function() {
     buf = [];
-    console.log("xhr.send");
+    console.log("xhr open and send");
     xhr.open("GET", "/stream");
     xhr.send();
 }
 stop.onclick = function() {
+    message.innerHTML = "";
+    console.log("xhr abort");
     xhr.abort();
 }
