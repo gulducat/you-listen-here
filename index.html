@@ -2,80 +2,33 @@
 <html>
     <head>
         <title>You Listen Here</title>
-    </head>
-    <script defer>
-        // raw xhr is apparently the simplest way to get a streaming http connection..?
-        // fetch() isn't good for it, socket.io seems mixed and more complicated.
-        // todo: maybe actual websocket is the way to go?  but for now...
-        var xhr = new XMLHttpRequest();
-        xhr.open("GET", "/stream");
-
-        // set up us a web audio api
-        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        console.log("sampleRate: " + audioCtx.sampleRate);
-        bufferSize = audioCtx.sampleRate/2;
-        var buffer, chData, source;
-        // xhr.setRequestHeader("Connection", "keep-alive");
-        // xhr.setRequestHeader("Keep-Alive", "timeout=5, max=100");
-
-        var lastSpot = 0;
-        var buf = [];
-
-        async function makeSound(samples) {
-            // each source can only be sent once, so we do this here.
-            // the order of these things is important, but i'm not totally clear on why...
-            source = audioCtx.createBufferSource();
-            source.connect(audioCtx.destination);
-            source.buffer = buffer;
-            buffer = audioCtx.createBuffer(
-                1,
-                samples.length,
-                audioCtx.sampleRate,
-            );
-            chData = buffer.getChannelData(0);
-
-            // put em in the channel
-            samples.forEach((samp, i, _a) => {
-                chData[i] = samp;
-            })
-
-            console.log("start -- samples:", samples.length, "; buf:", buf.length);
-            source.start();
-        }
-
-        xhr.onprogress = function () {
-            // some acrobatics to break the stream up into sensible chunks, since it is cumulative over time.
-            // todo: this could add up in browser memory, do occasional dis-and-re-connect?
-            txt = xhr.responseText;
-            txt = txt.slice(lastSpot);
-            lastSpot = xhr.responseText.length;
-            
-            lines = txt.split("\n");
-            lines.forEach((l, idx, arr) => {
-                samples = l.split(",");
-                // samples = new Float32Array(samples);
-                buf = buf.concat(samples);
-                if (buf.length >= bufferSize) {
-                    to_play = buf.slice(0, bufferSize);
-                    buf = buf.slice(bufferSize); // reset our lil sample buffer.
-                    makeSound(to_play);
-                }
-            });
-        };
-
-        xhr.onreadystatechange = function () {
-            // console.log("readyState:", xhr.readyState)
-            if (xhr.readyState === 4) {
-                console.log("xhr.exit", xhr.status, xhr.responseText.length);
+        <style>
+            body {
+                background-color: #271253;
+                color: #fff;
+                text-align: center;
             }
-        };
-
-        console.log("xhr.send");
-        xhr.send();
-    </script>
+            button {
+                color: #000;
+                border: 2px solid #5835c2;
+                border-radius: 6px;
+                padding: 10px 18px;
+                font-size: 16px;
+            }
+            button.play {
+                background-color: #2ff1fa;
+            }
+            button.stop {
+                background-color: #fe13ec;
+            }
+        </style>
+        <script src="/stream.js" defer></script>
+    </head>
     <body>
-        <!-- dirty secret: this button does actually nothing.
-             it just gets user interaction so source.start() works. -->
-        <button>start listening</button>
+        <br>
+        <img src="/you-listen-here.png" alt="you listen here">
+        <br>
+        <button class="play">play</button>
+        <button class="stop">stop</button>
     </body>
 </html>
