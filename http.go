@@ -10,11 +10,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
-
-// TODO: custom sync.Map thing
 
 func webClient(sampleCh chan<- []float32) {
 	host := os.Getenv("HOST")
@@ -49,8 +46,10 @@ func webClient(sampleCh chan<- []float32) {
 }
 
 func webServer(ctx context.Context, sampleCh <-chan []float32) {
+	clientChans := &SampleChanneler{}
+
 	// add handlers for http routes
-	clientChans := addHandlers()
+	addHandlers(clientChans)
 
 	// send input sample slices to all client channels as they come in
 	go fanChannels(ctx, sampleCh, clientChans)
@@ -74,53 +73,32 @@ func webServer(ctx context.Context, sampleCh <-chan []float32) {
 	}
 }
 
-func fanChannels(ctx context.Context, inCh <-chan []float32, outChans *sync.Map) {
+func fanChannels(ctx context.Context, inCh <-chan []float32, outChs *SampleChanneler) {
 	for {
 		select {
+		case samples := <-inCh:
+			outChs.WriteToAll(samples, time.Millisecond*250) // TODO: good magic?
+
 		case <-ctx.Done():
 			log.Println("channel fanner ctx done")
 			return
-
-		case samples := <-inCh:
-			outChans.Range(func(_, val interface{}) bool {
-				ch, ok := val.(chan []float32)
-				if !ok {
-					log.Printf("not a sample chan?  %#v", ch)
-					return true
-				}
-
-				// anonymous goroutine to prevent timeout case from blocking other channels
-				go func(ch chan []float32) {
-					select {
-					case ch <- samples: // this right here is the main event in this program.
-					case <-time.After(time.Millisecond * 500):
-						log.Println("no sendy after 500ms")
-					}
-				}(ch)
-
-				return true
-			})
 		}
 	}
 }
 
-func addHandlers() (chans *sync.Map) {
-	chans = &sync.Map{}
-
-	count := 0      // current open connections
-	totalCount := 0 // total number of /stream connections, mainly for /stats vanity
+func addHandlers(outChs *SampleChanneler) {
 
 	http.HandleFunc("/", tryFiles)
 
 	http.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
-		msg := fmt.Sprintf("total: %d\ncurrent: %d\n", totalCount, count)
+		msg := fmt.Sprintf("total: %d\ncurrent: %d\n", outChs.count, outChs.len)
 		if _, err := w.Write([]byte(msg)); err != nil {
 			log.Println("error writing stats:", err)
 		}
 	})
 
 	http.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
-		if count > 50 {
+		if outChs.len > 50 {
 			w.WriteHeader(http.StatusGatewayTimeout)
 			_, err := w.Write([]byte("uh oh too many?"))
 			chk("too many", err)
@@ -129,23 +107,15 @@ func addHandlers() (chans *sync.Map) {
 			}
 			return
 		}
-		count++
-		totalCount++
-		func(id int) {
-			ch := make(chan []float32, 48000) // todo: hm.
-			// defer close(ch) // this causes panic, shouldn't close here on the receiver side
-			log.Println("✅ connecting:", id, "current:", count)
 
-			chans.Store(id, ch)
-			handleStream(w, r, id, ch)
-			chans.Delete(id)
-
-			count--
-			log.Println("❌ completed:", id, "current:", count)
-		}(totalCount)
+		buffer := 200 // 200 slices, each of length ~64, is ~12800 samples ; TODO: good magic?
+		id, ch := outChs.NewChannel(buffer)
+		log.Println("✅ connecting:", id, "current:", outChs.len)
+		handleStream(w, r, id, ch)
+		outChs.Delete(id)
+		log.Println("❌ completed:", id, "current:", outChs.len)
 	})
 
-	return chans
 }
 
 func tryFiles(w http.ResponseWriter, r *http.Request) {
