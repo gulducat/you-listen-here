@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+// TODO: custom sync.Map thing
+
 func webClient(sampleCh chan<- []float32) {
 	host := os.Getenv("HOST")
 	if host == "" {
@@ -48,10 +50,10 @@ func webClient(sampleCh chan<- []float32) {
 
 func webServer(ctx context.Context, sampleCh <-chan []float32) {
 	// add handlers for http routes
-	clientChans, chLock := addHandlers()
+	clientChans := addHandlers()
 
 	// send input sample slices to all client channels as they come in
-	go fanChannels(ctx, sampleCh, clientChans, chLock)
+	go fanChannels(ctx, sampleCh, clientChans)
 
 	// serve http
 	errCh := make(chan error)
@@ -72,7 +74,7 @@ func webServer(ctx context.Context, sampleCh <-chan []float32) {
 	}
 }
 
-func fanChannels(ctx context.Context, inCh <-chan []float32, outChans map[int]chan []float32, chLock *sync.RWMutex) {
+func fanChannels(ctx context.Context, inCh <-chan []float32, outChans *sync.Map) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -80,39 +82,45 @@ func fanChannels(ctx context.Context, inCh <-chan []float32, outChans map[int]ch
 			return
 
 		case samples := <-inCh:
-			chLock.RLock()
-			for _, ch := range outChans {
+			outChans.Range(func(_, val interface{}) bool {
+				ch, ok := val.(chan []float32)
+				if !ok {
+					log.Printf("not a sample chan?  %#v", ch)
+					return true
+				}
+
 				// anonymous goroutine to prevent timeout case from blocking other channels
 				go func(ch chan []float32) {
 					select {
-					case ch <- samples:
+					case ch <- samples: // this right here is the main event in this program.
 					case <-time.After(time.Millisecond * 500):
 						log.Println("no sendy after 500ms")
 					}
 				}(ch)
-			}
-			chLock.RUnlock()
+
+				return true
+			})
 		}
 	}
 }
 
-func addHandlers() (chans map[int]chan []float32, chLock *sync.RWMutex) {
-	chans = make(map[int]chan []float32)
-	chLock = &sync.RWMutex{}
+func addHandlers() (chans *sync.Map) {
+	chans = &sync.Map{}
 
+	count := 0      // current open connections
 	totalCount := 0 // total number of /stream connections, mainly for /stats vanity
 
 	http.HandleFunc("/", tryFiles)
 
 	http.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
-		msg := fmt.Sprintf("total: %d\ncurrent: %d\n", totalCount, len(chans))
+		msg := fmt.Sprintf("total: %d\ncurrent: %d\n", totalCount, count)
 		if _, err := w.Write([]byte(msg)); err != nil {
 			log.Println("error writing stats:", err)
 		}
 	})
 
 	http.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
-		if len(chans) > 50 {
+		if count > 50 {
 			w.WriteHeader(http.StatusGatewayTimeout)
 			_, err := w.Write([]byte("uh oh too many?"))
 			chk("too many", err)
@@ -121,27 +129,23 @@ func addHandlers() (chans map[int]chan []float32, chLock *sync.RWMutex) {
 			}
 			return
 		}
+		count++
 		totalCount++
 		func(id int) {
 			ch := make(chan []float32, 48000) // todo: hm.
 			// defer close(ch) // this causes panic, shouldn't close here on the receiver side
+			log.Println("✅ connecting:", id, "current:", count)
 
-			chLock.Lock()
-			chans[id] = ch
-			chLock.Unlock()
-
-			log.Println("✅ connecting:", id, "current:", len(chans))
+			chans.Store(id, ch)
 			handleStream(w, r, id, ch)
+			chans.Delete(id)
 
-			chLock.Lock()
-			delete(chans, id)
-			chLock.Unlock()
-
-			log.Println("❌ completed:", id, "current:", len(chans))
+			count--
+			log.Println("❌ completed:", id, "current:", count)
 		}(totalCount)
 	})
 
-	return chans, chLock
+	return chans
 }
 
 func tryFiles(w http.ResponseWriter, r *http.Request) {
