@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-func webClient(msgCh chan<- []float32) {
+func webClient(sampleCh chan<- []float32) {
 	host := os.Getenv("HOST")
 	if host == "" {
 		host = "http://127.0.0.1:8080"
@@ -42,55 +42,72 @@ func webClient(msgCh chan<- []float32) {
 			}
 			samps = append(samps, float32(f))
 		}
-		msgCh <- samps
+		sampleCh <- samps
 	}
 }
 
-func webServer(ctx context.Context, msgCh <-chan []float32) {
-	chans := make(map[int]chan []float32)
-	var chLock sync.RWMutex
-	totalCount := 0
+func webServer(ctx context.Context, sampleCh <-chan []float32) {
+	// add handlers for http routes
+	clientChans, chLock := addHandlers()
 
-	// send messages from msgCh to all worker chans
-	go func(ctx context.Context) {
-		stopCh := make(chan struct{}, 1)
-	loop:
-		for {
-			select {
-			case <-ctx.Done():
-				log.Println("worker messenger done")
-				break loop
-			case <-stopCh:
-				log.Println("stopCh")
-				break loop
+	// send input sample slices to all client channels as they come in
+	go fanChannels(ctx, sampleCh, clientChans, chLock)
 
-			case msg := <-msgCh:
-				chLock.RLock()
-				for _, ch := range chans {
-					// this does something, but does it help?
-					go func(ch chan []float32) { // TODO?
-						select {
-						case ch <- msg:
-						case <-time.After(time.Millisecond * 500):
-							log.Println("no sendy after 500ms")
-							stopCh <- struct{}{}
-							return
-						}
-					}(ch)
-				}
-				chLock.RUnlock()
-			}
+	// serve http
+	errCh := make(chan error)
+	go func() {
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "8080"
 		}
-	}(ctx)
+		log.Println("http listen: " + port)
+		errCh <- http.ListenAndServe("0.0.0.0:"+port, nil)
+	}()
+
+	select {
+	case err := <-errCh:
+		log.Println("server err:", err)
+	case <-ctx.Done():
+		log.Println("web server done")
+	}
+}
+
+func fanChannels(ctx context.Context, inCh <-chan []float32, outChans map[int]chan []float32, chLock *sync.RWMutex) {
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("channel fanner ctx done")
+			return
+
+		case samples := <-inCh:
+			chLock.RLock()
+			for _, ch := range outChans {
+				// anonymous goroutine to prevent timeout case from blocking other channels
+				go func(ch chan []float32) {
+					select {
+					case ch <- samples:
+					case <-time.After(time.Millisecond * 500):
+						log.Println("no sendy after 500ms")
+					}
+				}(ch)
+			}
+			chLock.RUnlock()
+		}
+	}
+}
+
+func addHandlers() (chans map[int]chan []float32, chLock *sync.RWMutex) {
+	chans = make(map[int]chan []float32)
+	chLock = &sync.RWMutex{}
+
+	totalCount := 0 // total number of /stream connections, mainly for /stats vanity
 
 	http.HandleFunc("/", tryFiles)
 
 	http.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
 		msg := fmt.Sprintf("total: %d\ncurrent: %d\n", totalCount, len(chans))
 		if _, err := w.Write([]byte(msg)); err != nil {
-			if err != nil {
-				log.Println("error writing stats:", err)
-			}
+			log.Println("error writing stats:", err)
 		}
 	})
 
@@ -124,22 +141,7 @@ func webServer(ctx context.Context, msgCh <-chan []float32) {
 		}(totalCount)
 	})
 
-	errCh := make(chan error)
-	go func() {
-		port := os.Getenv("PORT")
-		if port == "" {
-			port = "8080"
-		}
-		log.Println("http listen: " + port)
-		errCh <- http.ListenAndServe("0.0.0.0:"+port, nil)
-	}()
-
-	select {
-	case err := <-errCh:
-		log.Println("server err:", err)
-	case <-ctx.Done():
-		log.Println("web server done")
-	}
+	return chans, chLock
 }
 
 func tryFiles(w http.ResponseWriter, r *http.Request) {
@@ -166,7 +168,6 @@ func tryFiles(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Println("write", uri, err)
 	}
-
 }
 
 func handleStream(w http.ResponseWriter, r *http.Request, id int, ch <-chan []float32) {
