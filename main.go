@@ -17,6 +17,7 @@ import (
 	"time"
 )
 
+// todo: not this.
 func chk(msg string, err error) {
 	log.Println("chk msg:", msg)
 	if err != nil {
@@ -26,7 +27,7 @@ func chk(msg string, err error) {
 }
 
 func main() {
-	badArgs := "u want 'server' or 'client' or 'echo' pls?"
+	badArgs := "u want 'websocket' or 'server' or 'client' or 'echo' pls?"
 	if len(os.Args) < 2 {
 		log.Fatal(badArgs)
 	}
@@ -34,10 +35,11 @@ func main() {
 	// for wrapping things up
 	sigsCh := make(chan os.Signal, 1)
 	signal.Notify(sigsCh, syscall.SIGINT, syscall.SIGTERM)
+	// TODO: does this withcancel actually do anything here?
 	ctx, stopCtx := context.WithCancel(context.Background())
 	defer stopCtx()
 
-	// init portaudio
+	// init portaudio NOTE: this needs to be here, run *after* stopCtx...?
 	term := audioInit()
 	defer term()
 
@@ -46,12 +48,21 @@ func main() {
 	p, err := getParams(1, 1)
 	chk("getParams", err)
 
-	buffer := int(p.SampleRate) * 2
+	// this buffer is to account for possible disparity between
+	// speed of incoming information from portaudio
+	// and fanning the data out to client channels.
+	// it does not introduce much if any delay from what I can tell with my ears.
+	buffer := int(p.SampleRate) * 2 // lol idk
+	// buffer := 2048
 	s := &Streamer{
 		ch: make(chan []float32, buffer),
 	}
 
 	switch os.Args[1] {
+
+	case "websocket":
+		go OpenStream(ctx, p, s, s.read)
+		go ServeWebSocket(ctx, s.ch)
 
 	case "echo":
 		go OpenStream(ctx, p, s, s.read)
@@ -82,9 +93,12 @@ func main() {
 	select {
 	case sig := <-sigsCh:
 		log.Println("END signal:", sig)
+		stopCtx()
 	case <-ctx.Done():
 		log.Println("END ctx:", ctx.Err())
 	}
+	log.Println("stop", s.Stop())
+	log.Println("close", s.Close())
 	log.Println("start final sleep")
 	time.Sleep(time.Millisecond * 50)
 	log.Println("fin.")

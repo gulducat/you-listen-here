@@ -1,19 +1,32 @@
 #!/bin/bash
 
-# set -x
+set -x
+
+# host='localhost'
+# url='http://localhost:8080'
+host='youlistenhere.com'
+url='http://youlistenhere.com'
 
 randy() {
     echo "$RANDOM % 10" | bc
 }
 
 clienty() {
-    sleep "$(randy)"
-    curl -Ss localhost:8080/stream >/dev/null &
+    curl -i -N -s -S \
+    -H "Connection: Upgrade" \
+    -H "Upgrade: websocket" \
+    -H "Sec-WebSocket-Version: 13" \
+    -H "Sec-WebSocket-Key: hihihi" \
+    -H "Host: $host" \
+    -H "Origin: $url" \
+    $url/websocket \
+    >/dev/null &
     echo $!
 }
 
-for _ in range{1..150}; do 
+for _ in range{1..40}; do 
     {
+      sleep "$(randy)"
       pid=$(clienty)
       sleep "$(randy)"
       kill "$pid" 2>/dev/null

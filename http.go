@@ -10,7 +10,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 )
 
 func webClient(sampleCh chan<- []float32) {
@@ -52,7 +51,7 @@ func webServer(ctx context.Context, sampleCh <-chan []float32) {
 	addHandlers(clientChans)
 
 	// send input sample slices to all client channels as they come in
-	go fanChannels(ctx, sampleCh, clientChans)
+	go FanChannels(ctx, sampleCh, clientChans)
 
 	// serve http
 	errCh := make(chan error)
@@ -70,19 +69,6 @@ func webServer(ctx context.Context, sampleCh <-chan []float32) {
 		log.Println("server err:", err)
 	case <-ctx.Done():
 		log.Println("web server done")
-	}
-}
-
-func fanChannels(ctx context.Context, inCh <-chan []float32, outChs *SampleChanneler) {
-	for {
-		select {
-		case samples := <-inCh:
-			outChs.WriteToAll(samples, time.Millisecond*250) // TODO: good magic?
-
-		case <-ctx.Done():
-			log.Println("channel fanner ctx done")
-			return
-		}
 	}
 }
 

@@ -1,4 +1,8 @@
-# mainly for some delay during testing
+# distant proxy for some delay during testing
+
+variable "nginx_upstream" {
+  description = "server IP or hostname"
+}
 
 job "you-listen-here" {
   # datacenters = ["dc1"]
@@ -14,6 +18,7 @@ job "you-listen-here" {
       name = "you-listen-here"
       port = "http"
       tags = [
+        "owner=gulducat@github",
         "traefik.enable=true",
         "traefik.http.routers.you-listen-here.tls=true",
         "traefik.http.routers.you-listen-here.rule=Host(`you-listen-here.devhashi.app`)",
@@ -38,12 +43,22 @@ job "you-listen-here" {
       template {
         destination = "local/default.conf.template"
         data = <<-EOF
+        upstream backend {
+          server ${var.nginx_upstream};
+        }
         server {
           listen       80;
           listen  [::]:80;
           server_name _;
           location / {
-            proxy_pass http://youlistenhere.com;
+            proxy_pass http://backend;
+            proxy_set_header Host $host;
+          }
+          location /websocket {
+            proxy_pass http://backend;
+            proxy_set_header Connection Upgrade;
+            proxy_set_header Upgrade websocket;
+            proxy_set_header Host $host;
           }
         }
         EOF

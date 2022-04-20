@@ -47,9 +47,6 @@ func OpenStream(ctx context.Context, p portaudio.StreamParameters, s *Streamer, 
 	s.Stream, err = portaudio.OpenStream(p, f)
 	chk("open", err)
 	chk("start", s.Start())
-	<-ctx.Done()
-	chk("stop", s.Stop())
-	chk("close", s.Close())
 }
 
 func (s *Streamer) read(in, _out []float32) {
@@ -63,15 +60,12 @@ func (s *Streamer) read(in, _out []float32) {
 
 func (s *Streamer) write(_in, out []float32) {
 	// log.Println("write")
-	var in []float32
 	select {
-	case v := <-s.ch:
-		in = v
+	case in := <-s.ch:
+		for i := range out {
+			out[i] = in[i]
+		}
 	case <-time.After(time.Millisecond * 500):
 		log.Println("write timeout")
-		return
-	}
-	for i := range out {
-		out[i] = in[i]
 	}
 }
